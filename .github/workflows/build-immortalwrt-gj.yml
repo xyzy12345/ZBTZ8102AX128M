@@ -1,0 +1,202 @@
+---
+name: Build ImmortalWrt for ZBT Z8102AX V2 (128MB Flash)
+
+on:
+  workflow_dispatch:
+    inputs:
+      clean_disk_space:
+        description: 'Clean disk space before build (清除磁盘空间以释放空间)'
+        required: true
+        default: true
+        type: boolean
+  push:
+    branches: [main, master]
+    paths:
+      - 'target/linux/mediatek/dts/mt7981b-zbtlink-zbt-z8102ax-v2.dts'
+      - '.github/workflows/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Free up disk space
+        # yamllint disable-line rule:line-length
+        if: github.event_name == 'push' || github.event.inputs.clean_disk_space == 'true'
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          # Remove unnecessary software to free up disk space
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /usr/share/swift
+
+          # 清理Docker镜像和容器
+          docker images -q | xargs -r docker rmi 2>/dev/null || true
+
+          # Clean apt cache
+          sudo apt-get clean
+
+          echo "Disk space after cleanup:"
+          df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: 'custom'
+
+      - name: Clone ImmortalWrt v24.10.4
+        # yamllint disable rule:line-length
+        run: |
+          git clone --depth=1 --branch=v24.10.4 \
+            https://github.com/immortalwrt/immortalwrt.git
+          cd immortalwrt
+          # 仅添加 qmodem 模组管理插件源
+          echo "src-git qmodem https://github.com/bxyun0/qmodem.git;main" >> feeds.conf.default
+        # yamllint enable rule:line-length
+
+      # 注意：不再复制自定义 DTS，使用官方已有的 DTS 文件
+
+      - name: Cache downloads
+        uses: actions/cache@v4
+        with:
+          path: immortalwrt/dl
+          key: dl-${{ hashFiles('immortalwrt/feeds.conf.default') }}
+          restore-keys: |
+            dl-
+
+      - name: Cache feeds
+        uses: actions/cache@v4
+        with:
+          path: |
+            immortalwrt/feeds
+            immortalwrt/package/feeds
+          key: feeds-${{ hashFiles('immortalwrt/feeds.conf.default') }}
+          restore-keys: |
+            feeds-
+
+      - name: Setup ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-immortalwrt-gj-${{ github.sha }}
+          restore-keys: |
+            ccache-immortalwrt-gj-
+
+      - name: Setup build environment
+        run: |
+          echo "Disk space before setup:"
+          df -h
+
+          cd immortalwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+          echo "Disk space after feeds update:"
+          df -h
+
+          # 安装编译依赖
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison g++ \
+            gawk gcc-multilib g++-multilib gettext git libncurses5-dev \
+            libssl-dev python3 python3-selinux python3-pip rsync unzip \
+            zlib1g-dev file wget qemu-utils upx libelf-dev device-tree-compiler
+
+          # Setup ccache
+          mkdir -p ~/.ccache
+          echo "max_size = 5.0G" > ~/.ccache/ccache.conf
+          echo "compression = true" >> ~/.ccache/ccache.conf
+
+          echo "Disk space after dependency installation:"
+          df -h
+
+      - name: Configure build
+        run: |
+          cd immortalwrt
+          # 创建精简配置，仅包含基础LuCI和qmodem相关插件
+          cat > .config << 'EOF'
+          CONFIG_TARGET_mediatek=y
+          CONFIG_TARGET_mediatek_filogic=y
+          CONFIG_TARGET_mediatek_filogic_DEVICE_zbtlink_zbt-z8102ax-v2=y
+          
+          # ================== Build Optimization ==================
+          CONFIG_CCACHE=y
+          
+          # ================== Base LuCI ==================
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-base=y
+          CONFIG_PACKAGE_luci-compat=y
+          CONFIG_PACKAGE_luci-theme-bootstrap=y
+          
+          # ================== qmodem模组管理插件 ==================
+          CONFIG_PACKAGE_luci-app-qmodem=y
+          CONFIG_PACKAGE_luci-app-qmodem-sms=y
+          CONFIG_PACKAGE_luci-app-qmodem-mwan=y
+          CONFIG_PACKAGE_luci-app-qmodem-ttl=y
+          
+          # ================== 必要的模组驱动 ==================
+          CONFIG_PACKAGE_kmod-usb3=y
+          CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y
+          CONFIG_PACKAGE_kmod-usb-serial-option=y
+          CONFIG_PACKAGE_kmod-usb-net-rndis=y
+          CONFIG_PACKAGE_kmod-usb-wwan=y
+          CONFIG_PACKAGE_kmod-usb-net-sierrawireless=y
+          CONFIG_PACKAGE_kmod-usb-serial-qualcomm=y
+          CONFIG_PACKAGE_kmod-usb-acm=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y
+          CONFIG_PACKAGE_kmod-usb-net-huawei-cdc-ncm=y
+          
+          # ================== 网络与系统工具 ==================
+          CONFIG_PACKAGE_wget=y
+          CONFIG_PACKAGE_ubi-utils=y
+          CONFIG_PACKAGE_mtd-utils=y
+          
+          # ================== 可选内核模块 ==================
+          CONFIG_PACKAGE_kmod-mt7915e=y
+          CONFIG_PACKAGE_kmod-mt7981-firmware=y
+          CONFIG_PACKAGE_mt7981-wo-firmware=y
+          CONFIG_PACKAGE_kmod-usb2=y
+          CONFIG_PACKAGE_kmod-usb-ohci=y
+          EOF
+
+          # 应用默认配置，自动解析依赖
+          make defconfig
+
+      - name: Build firmware
+        run: |
+          cd immortalwrt
+          echo "Available disk space before build:"
+          df -h
+
+          # 根据可用核心数确定并行任务数
+          JOBS=$(($(nproc) + 1))
+          echo "Building with ${JOBS} parallel jobs ($(nproc) CPU cores detected)"
+          
+          # 后台监控磁盘空间（最多4小时）
+          (timeout 4h bash -c 'while true; do
+            echo "=== Disk space check at $(date +%H:%M:%S) ==="
+            df -h | grep -E "Filesystem|/dev/root"
+            sleep 300
+          done') &
+          MONITOR_PID=$!
+
+          # 编译固件，先尝试全并行，失败则单线程
+          make -j${JOBS} V=s || make -j1 V=s
+          
+          # 停止监控进程
+          kill $MONITOR_PID 2>/dev/null || true
+
+          echo "Available disk space after build:"
+          df -h
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-zbt-z8102ax-v2-128m
+          path: immortalwrt/bin/targets/mediatek/filogic/
+          retention-days: 7
