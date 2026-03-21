@@ -157,7 +157,7 @@ jobs:
           CONFIG_PACKAGE_automount=y
           CONFIG_PACKAGE_luci-app-openclash=y 
           # CONFIG_PACKAGE_luci-app-openclash=y
-          CONFIG_PACKAGE_adguardhome=y
+          # CONFIG_PACKAGE_adguardhome=y
           CONFIG_PACKAGE_kmod-usb2=y
           CONFIG_PACKAGE_kmod-usb-ohci=y
           CONFIG_PACKAGE_kmod-ipt-extra=y
