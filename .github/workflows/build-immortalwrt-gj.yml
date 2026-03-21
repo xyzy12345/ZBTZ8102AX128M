@@ -49,14 +49,12 @@ jobs:
           path: 'custom'
 
       - name: Clone ImmortalWrt v24.10.4
-        # yamllint disable rule:line-length
         run: |
           git clone --depth=1 --branch=v24.10.4 \
             https://github.com/immortalwrt/immortalwrt.git
           cd immortalwrt
-          # 仅添加 qmodem 模组管理插件源
-          echo "src-git qmodem https://github.com/bxyun0/qmodem.git;main" >> feeds.conf.default
-        # yamllint enable rule:line-length
+          # 添加 QModem 模组管理插件源（公开源）
+          echo "src-git modem https://github.com/FUjr/QModem.git;main" >> feeds.conf.default
 
       # 注意：不再复制自定义 DTS，使用官方已有的 DTS 文件
 
